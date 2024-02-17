@@ -1,0 +1,15 @@
+{
+  "s3_staging_path": "s3://datascience-workspace-dev/buyer-intent/buyer_intent_data_sets",
+  "s3_path_training_sets": "s3://datascience-workspace-dev/buyer-intent/buyer_intent_data_sets/training_sets",
+  "db_name": "buyer_intent",
+  "s3_path_mem_id_001": "s3://move-dataeng-bd-prod/cnsp/consumer_analytical_profile_member_id_summary_t001/",
+  "s3_path_mem_id_007": "s3://move-dataeng-bd-prod/cnsp/consumer_analytical_profile_member_id_summary_t007/",
+  "s3_path_mem_id_030": "s3://move-dataeng-bd-prod/cnsp/consumer_analytical_profile_member_id_summary_t030/",
+  "s3_path_mem_id_060": "s3://move-dataeng-bd-prod/cnsp/consumer_analytical_profile_member_id_summary_t060/",
+  "s3_path_mem_id_090": "s3://move-dataeng-bd-prod/cnsp/consumer_analytical_profile_member_id_summary_t090/",
+  "s3_path_qualtrics_survey": "s3://datascience-workspace-dev/buyer-intent/qualtrics-intent-survey/",
+  "default_double": "0.0",
+  "default_integer": "0",
+  "default_string": "",
+  "default_dwell_threshhold": "180"
+}

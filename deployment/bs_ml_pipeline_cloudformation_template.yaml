@@ -1,0 +1,1250 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  It creates buyer stage roles, lambdas,  state machine, sns and triggering event
+  for daily ml pipeline
+Parameters:
+  Env:
+    Default: dev
+    Description: Env(dev|qa|prod)
+    Type: String
+    MinLength: 2
+    MaxLength: 16
+  S3BucketName:
+    Default: rdc-buyer-stage-ml-dev
+    Description: contains s3 bucket name that will be used in account
+    Type: String
+    MinLength: 2
+    MaxLength: 300
+  DynamoDbTableName:
+    Default: buyer-stage-ml-pipeline-results-dev
+    Description: Dynamodb table name used for stroring results
+    Type: String
+    MinLength: 2
+    MaxLength: 300
+Mappings:
+  Config:
+    dev:
+      CloudServicesBoundary: 'arn:aws:iam::425555124585:policy/CloudServices-Boundary'
+      MLPipelineSchedule: cron(0 10 ? * * *)
+      Region: us-west-2
+      Bucket: rdc-buyer-stage-ml-dev
+      AutomlPrefix: sagemaker-automl/output/
+      TrainPrefix: train/csv/buyer_stage_tr_val_set.csv
+      TestPrefix: test/with-target/
+      TestPrefixNoTarget: test/no-target/
+      InputPrefix: inputs/
+      InferencePrefix: inference-results/
+      BestModelPrefix: best-model/buyer_stage.pkl
+      SourceCodesPrefix: ml-pipeline-codes/
+      AutomlMaxCandidate: 200
+      AutomlMaxRuntime: 8000
+      MaxConcurrentTransforms: 5
+      MaxPayloadInMb: 10
+      BatchStrategy: MultiRecord
+      InstanceType: ml.m4.2xlarge
+      InstanceCount: 4
+      MaxRetries: 3
+      GlueWorkerType: G.1X
+      GlueNumberOfWorkers: 10
+      GlueTimeout: 480
+      DynamoDbTable: buyer-stage-ml-pipeline-results-dev
+      DynamoTtlDay: 5
+      NumberOfDaysLag: 3
+      NumberOfPartitions: 70
+    qa:
+      CloudServicesBoundary: 'arn:aws:iam::337683724535:policy/CloudServices-Boundary'
+      MLPipelineSchedule: cron(0 10 ? * * *)
+      Region: us-west-2
+      Bucket: rdc-buyer-stage-ml-qa
+      AutomlPrefix: sagemaker-automl/output/
+      TrainPrefix: train/csv/buyer_stage_tr_val_set.csv
+      TestPrefix: test/with-target/
+      TestPrefixNoTarget: test/no-target/
+      InputPrefix: inputs/
+      InferencePrefix: inference-results/
+      BestModelPrefix: best-model/buyer_stage.pkl
+      SourceCodesPrefix: ml-pipeline-codes/
+      AutomlMaxCandidate: 200
+      AutomlMaxRuntime: 8000
+      MaxConcurrentTransforms: 5
+      MaxPayloadInMb: 10
+      BatchStrategy: MultiRecord
+      InstanceType: ml.m4.2xlarge
+      InstanceCount: 4
+      MaxRetries: 3
+      GlueWorkerType: G.1X
+      GlueNumberOfWorkers: 10
+      GlueTimeout: 480
+      DynamoDbTable: buyer-stage-ml-pipeline-results-qa
+      DynamoTtlDay: 7
+      NumberOfDaysLag: 3
+      NumberOfPartitions: 70
+    prod:
+      CloudServicesBoundary: 'arn:aws:iam::747559966630:policy/CloudServices-Boundary'
+      MLPipelineSchedule: cron(0 10 ? * * *)
+      Region: us-west-2
+      Bucket: rdc-buyer-stage-ml-prod
+      AutomlPrefix: sagemaker-automl/output/
+      TrainPrefix: train/csv/buyer_stage_tr_val_set.csv
+      TestPrefix: test/with-target/
+      TestPrefixNoTarget: test/no-target/
+      InputPrefix: inputs/
+      InferencePrefix: inference-results/
+      BestModelPrefix: best-model/buyer_stage.pkl
+      SourceCodesPrefix: ml-pipeline-codes/
+      AutomlMaxCandidate: 250
+      AutomlMaxRuntime: 8000
+      MaxConcurrentTransforms: 5
+      MaxPayloadInMb: 10
+      BatchStrategy: MultiRecord
+      InstanceType: ml.m4.2xlarge
+      InstanceCount: 5
+      MaxRetries: 3
+      GlueWorkerType: G.1X
+      GlueNumberOfWorkers: 10
+      GlueTimeout: 480
+      DynamoDbTable: buyer-stage-ml-pipeline-results-prod
+      DynamoTtlDay: 7
+      NumberOfDaysLag: 3
+      NumberOfPartitions: 70
+Resources:
+  BuyerStageMLLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: BuyerStageMLLambda
+      Description: 'Allows Lambda functions to call S3, SageMaker, and Glue.'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - sagemaker.amazonaws.com
+                - lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonSNSFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonSageMakerFullAccess'
+        - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+      PermissionsBoundary: !FindInMap
+        - Config
+        - !Ref Env
+        - CloudServicesBoundary
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+      MaxSessionDuration: 14000
+  BuyerStageMLGlue:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: BuyerStageMLGlue
+      Description: Allows Glue to access S3 and DynamoDb.
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+        - 'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess'
+      PermissionsBoundary: !FindInMap
+        - Config
+        - !Ref Env
+        - CloudServicesBoundary
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+      MaxSessionDuration: 14000
+  BuyerStageMLStepFunctionsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: BuyerStageMLStepFunctions
+      Description: >-
+        Allows Buyer Stage Step Function to call Sagemaker, lambdas, s3 Glue,
+        and DynamoDb
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaRole'
+        - 'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+      PermissionsBoundary: !FindInMap
+        - Config
+        - !Ref Env
+        - CloudServicesBoundary
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+      MaxSessionDuration: 14000
+  ExecuteStateMachineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowCWEServiceToAssumeRole
+            Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Principal:
+              Service:
+                - events.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: ExecuteStateMachine
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:StartExecution'
+                Resource: '*'
+      PermissionsBoundary: !FindInMap
+        - Config
+        - !Ref Env
+        - CloudServicesBoundary
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  BuyerStageSNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      DisplayName: BuyerStageSNSNotification
+      Subscription:
+        - Endpoint: reza.rahimi@move.com
+          Protocol: email
+        - Endpoint: david.kong@move.com
+          Protocol: email
+        - Endpoint: 13107410711
+          Protocol: sms
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+      TopicName: BuyerStageSNSNotification
+  BuyerStageRunDailyRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: TriggerBuyerStageMLPipeline
+      Description: Trigers buyer stage ml pipeline for execution
+      ScheduleExpression: !FindInMap
+        - Config
+        - !Ref Env
+        - MLPipelineSchedule
+      State: ENABLED
+      Targets:
+        - Arn: !Ref BuyerStageStateMachine
+          Id: TargetFunctionV1
+          RoleArn: !GetAtt
+            - ExecuteStateMachineRole
+            - Arn
+  BuyerStageDynamoTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: member_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: member_id
+          KeyType: HASH
+      TableName: !Ref DynamoDbTableName
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  CheckAutomlStatus:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Checks AutoML status for buyer stage ML pipeline
+      Environment:
+        Variables:
+          ENV: !Ref Env
+      FunctionName: bs_lambda_check_automl_status
+      Handler: bs_lambda_check_automl_status.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_check_automl_status.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  CheckBatchTransformationStatus:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Checks batch transformation daily job for buyer stage ML pipeline
+      Environment:
+        Variables:
+          ENV: !Ref Env
+      FunctionName: bs_lambda_check_batch_transformation_status
+      Handler: bs_lambda_check_batch_transformation_status.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_check_batch_transformation_status.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  CheckIfDailyDataAvailable:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Checks if daily data available by ETL pipline for inferencing
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          BUCKET: !FindInMap
+            - Config
+            - !Ref Env
+            - Bucket
+          NUMBER_OF_DAYS_LAG: !FindInMap
+            - Config
+            - !Ref Env
+            - NumberOfDaysLag
+          INPUT_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - InputPrefix
+      FunctionName: bs_lambda_check_if_daily_data_available
+      Handler: bs_lambda_check_if_daily_data_available.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_check_if_daily_data_available.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  CheckIfModelAvailable:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Checks if model is available for buyer stage ML pipeline
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          BUCKET: !FindInMap
+            - Config
+            - !Ref Env
+            - Bucket
+          BEST_MODEL_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - BestModelPrefix
+      FunctionName: bs_lambda_check_if_model_available
+      Handler: bs_lambda_check_if_model_available.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_check_if_model_available.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  CheckIfTrainingDataAvailable:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Checks if training data is available for generating ML model
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          BUCKET: !FindInMap
+            - Config
+            - !Ref Env
+            - Bucket
+          TRAIN_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - TrainPrefix
+      FunctionName: bs_lambda_check_if_training_data_available
+      Handler: bs_lambda_check_if_training_data_available.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_check_if_training_data_available.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  CheckUploadingToDynamoDbStatus:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: >-
+        Uploads results from buyer stage Ml pipeline into DynamoDb as member_id
+        and user stage
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          GLUE_ROLE_ARN: !GetAtt
+            - BuyerStageMLGlue
+            - Arn
+      FunctionName: bs_lambda_check_uploading_to_dynamo_db_status
+      Handler: bs_lambda_check_uploading_to_dynamo_db_status.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_check_uploading_to_dynamo_db_status.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  CreateAndSaveModel:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Creates and saves optimal model for buyer stage
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          AUTOML_ROLE: !GetAtt
+            - BuyerStageMLLambdaRole
+            - Arn
+          BUCKET: !FindInMap
+            - Config
+            - !Ref Env
+            - Bucket
+          BEST_MODEL_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - BestModelPrefix
+      FunctionName: bs_lambda_create_and_save_model
+      Handler: bs_lambda_create_and_save_model.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_create_and_save_model.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  SendSnSNotification:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Send sns notification if failure happened in buyer stage ML pipeline
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          SNS_ARN: !Ref BuyerStageSNSTopic
+      FunctionName: bs_lambda_send_sns_notification
+      Handler: bs_lambda_send_sns_notification.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_send_sns_notification.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  StartAutoml:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Starts AutoML for buyer stage ML pipeline
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          AUTOML_ROLE: !GetAtt
+            - BuyerStageMLLambdaRole
+            - Arn
+          REGION: !FindInMap
+            - Config
+            - !Ref Env
+            - Region
+          BUCKET: !FindInMap
+            - Config
+            - !Ref Env
+            - Bucket
+          TRAIN_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - TrainPrefix
+          AUTOML_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - AutomlPrefix
+          AUTOML_MAX_CANDIDATE: !FindInMap
+            - Config
+            - !Ref Env
+            - AutomlMaxCandidate
+          AUTOML_MAX_RUNTIME: !FindInMap
+            - Config
+            - !Ref Env
+            - AutomlMaxRuntime
+      FunctionName: bs_lambda_start_automl
+      Handler: bs_lambda_start_automl.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_start_automl.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  StartBatchTransformation:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Starts batch transformation job for buyer stage ML pipeline
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          BUCKET: !FindInMap
+            - Config
+            - !Ref Env
+            - Bucket
+          BEST_MODEL_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - BestModelPrefix
+          NUMBER_OF_DAYS_LAG: !FindInMap
+            - Config
+            - !Ref Env
+            - NumberOfDaysLag
+          INSTANCE_TYPE: !FindInMap
+            - Config
+            - !Ref Env
+            - InstanceType
+          INSTANCE_COUNT: !FindInMap
+            - Config
+            - !Ref Env
+            - InstanceCount
+          MAX_CONCURRENT_TRANSFORMS: !FindInMap
+            - Config
+            - !Ref Env
+            - MaxConcurrentTransforms
+          MAX_PAYLOAD_IN_MB: !FindInMap
+            - Config
+            - !Ref Env
+            - MaxPayloadInMb
+          BATCH_STRATEGY: !FindInMap
+            - Config
+            - !Ref Env
+            - BatchStrategy
+          INFERENCE_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - InferencePrefix
+          INPUT_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - InputPrefix
+      FunctionName: bs_lambda_start_batch_stransformation
+      Handler: bs_lambda_start_batch_stransformation.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_start_batch_stransformation.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  StartUploadingToDynamoDb:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: Starts uploading data into DynamoDb for buyer stage ML pipeline
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          GLUE_ROLE_ARN: !GetAtt
+            - BuyerStageMLGlue
+            - Arn
+          MAX_RETRIES: !FindInMap
+            - Config
+            - !Ref Env
+            - MaxRetries
+          NUMBER_OF_DAYS_LAG: !FindInMap
+            - Config
+            - !Ref Env
+            - NumberOfDaysLag
+          BUCKET: !FindInMap
+            - Config
+            - !Ref Env
+            - Bucket
+          SOURCE_CODES_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - SourceCodesPrefix
+          GLUE_WORKER_TYPE: !FindInMap
+            - Config
+            - !Ref Env
+            - GlueWorkerType
+          GLUE_NUMBER_OF_WORKERS: !FindInMap
+            - Config
+            - !Ref Env
+            - GlueNumberOfWorkers
+          GLUE_TIMEOUT: !FindInMap
+            - Config
+            - !Ref Env
+            - GlueTimeout
+          REGION: !FindInMap
+            - Config
+            - !Ref Env
+            - Region
+          NUMBER_OF_PARTITIONS: !FindInMap
+            - Config
+            - !Ref Env
+            - NumberOfPartitions
+          DYNAMO_DB_TABLE: !FindInMap
+            - Config
+            - !Ref Env
+            - DynamoDbTable
+          DYNAMO_TTL_DAY: !FindInMap
+            - Config
+            - !Ref Env
+            - DynamoTtlDay
+          INFERENCE_PREFIX: !FindInMap
+            - Config
+            - !Ref Env
+            - InferencePrefix
+      FunctionName: bs_lambda_start_uploading_to_dynamo_db
+      Handler: bs_lambda_start_uploading_to_dynamo_db.lambda_handler
+      Role: !GetAtt
+        - BuyerStageMLLambdaRole
+        - Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: ml-pipeline-codes/bs_lambda_start_uploading_to_dynamo_db.zip
+      MemorySize: 150
+      Runtime: python3.7
+      Timeout: '300'
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+  BuyerStageStateMachine:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      StateMachineName: BuyerStageMLPipeline
+      DefinitionString: |-
+        {
+          "StartAt": "CheckDailyDataAvaiability",
+          "States": {
+            "CheckDailyDataAvaiability": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_check_if_daily_data_available"
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckDailyDataAvaiabilityResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckDailyDataAvaiabilityResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Available",
+                  "Next": "CheckModelAvailability"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Not-Available",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Exception",
+                  "Next": "SendSnSNotification"
+                }
+              ]
+            },
+            "CheckModelAvailability": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_check_if_model_available",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckModelAvailabilityResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckModelAvailabilityResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Available",
+                  "Next": "StartBatchTransformation"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Not-Available",
+                  "Next": "CheckTrainingDataAvailability"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Exception",
+                  "Next": "SendSnSNotification"
+                }
+              ]
+            },
+            "StartBatchTransformation": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_start_batch_stransformation",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckBatchTransformationStatus",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckBatchTransformationStatus": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_check_batch_transformation_status",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckBatchTransformationStatusResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckBatchTransformationStatusResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Completed",
+                  "Next": "StartUploadingToDynamoDB"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Stopped",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "InProgress",
+                  "Next": "WaitForBatchTransformation"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Failed",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Exception",
+                  "Next": "SendSnSNotification"
+                }
+              ]
+            },
+            "StartUploadingToDynamoDB": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_start_uploading_to_dynamo_db",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckUploadingToDynamoDBStatus",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckUploadingToDynamoDBStatus": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_check_uploading_to_dynamo_db_status",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckUploadingToDynamoDbResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckUploadingToDynamoDbResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "STARTING",
+                  "Next": "WaitForUploadingToDynamoDbGlueJob"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "RUNNING",
+                  "Next": "WaitForUploadingToDynamoDbGlueJob"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "STOPPING",
+                  "Next": "WaitForUploadingToDynamoDbGlueJob"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "STOPPED",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "Done"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "FAILED",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "TIMEOUT",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Exception",
+                  "Next": "SendSnSNotification"
+                }
+              ]
+            },
+            "WaitForUploadingToDynamoDbGlueJob": {
+              "Seconds": 300,
+              "Type": "Wait",
+              "Next": "CheckUploadingToDynamoDBStatus"
+            },
+            "SendSnSNotification": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_send_sns_notification",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "Next": "SNSFailed"
+                }
+              ]
+            },
+            "SNSFailed": {
+              "Type": "Fail"
+            },
+            "Done": {
+              "Type": "Succeed"
+            },
+            "WaitForBatchTransformation": {
+              "Seconds": 300,
+              "Type": "Wait",
+              "Next": "CheckBatchTransformationStatus"
+            },
+            "CheckTrainingDataAvailability": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_check_if_training_data_available",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckTrainingDataAvailabilityResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckTrainingDataAvailabilityResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Available",
+                  "Next": "StartAutoMl"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Not-Available",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Exception",
+                  "Next": "SendSnSNotification"
+                }
+              ]
+            },
+            "StartAutoMl": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_start_automl",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckAutoMlStatus",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckAutoMlStatus": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_check_automl_status",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "CheckAutoMlStatusResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "CheckAutoMlStatusResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Completed",
+                  "Next": "CreateAndSaveModel"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Stopped",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "InProgress",
+                  "Next": "WaitForAutoML"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Failed",
+                  "Next": "SendSnSNotification"
+                },
+                {
+                  "Variable": "$['Payload']['status']",
+                  "StringEquals": "Exception",
+                  "Next": "SendSnSNotification"
+                }
+              ]
+            },
+            "CreateAndSaveModel": {
+              "Parameters": {
+                "FunctionName": "bs_lambda_create_and_save_model",
+                "Payload": {
+                  "Input.$": "$.Payload"
+                }
+              },
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Type": "Task",
+              "Next": "StartBatchTransformation",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 4.0
+                }
+              ]
+            },
+            "WaitForAutoML": {
+              "Seconds": 300,
+              "Type": "Wait",
+              "Next": "CheckAutoMlStatus"
+            }
+          }
+        }
+      RoleArn: !GetAtt
+        - BuyerStageMLStepFunctionsRole
+        - Arn
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+Outputs:
+  BuyerStageDynamoDbTableName:
+    Description: Returns DynamoDb table name used to store inferences
+    Value: !Ref DynamoDbTableName

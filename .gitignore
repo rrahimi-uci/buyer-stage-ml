@@ -1,0 +1,11 @@
+.DS_Store
+*.pyc
+.vscode/settings.json
+*.xml
+*.iml
+.pytest_cache
+coverage_html_report
+.coverage
+env/*
+metastore_db
+.ipynb_checkpoints

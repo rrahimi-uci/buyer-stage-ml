@@ -1,0 +1,491 @@
+Description: "Buyer Stage ETL Pipeline EMR Cluster"
+
+Parameters:
+  Region:
+    Default: 'us-west-2'
+    Description: 'Default AWS region for deployment'
+    Type: 'String'
+    MinLength: 2
+    MaxLength: 16
+    AllowedPattern: "\\S*"
+  Env:
+    Default: "dev"
+    Description: "Env(dev|qa|prod)"
+    Type: "String"
+    MinLength: 2
+    MaxLength: 16
+    AllowedPattern: "dev|qa|prod"
+  Version:
+    Default: "v1"
+    Description: "Version of this Cloudformation build"
+    Type: "String"
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: "\\S*"
+  Input:
+    Default: "buyer_stage_etl_pipeline"
+    Description: "Buyer Stage ETL Pipeline EMR Cluster"
+    Type: "String"
+    AllowedPattern: "\\S*"
+  Name:
+    Default: "buyer_stage_etl_pipeline"
+    Description: "Shell command to execute on the worker group"
+    Type: "String"
+    MinLength: 2
+    MaxLength: 1024
+  masterInstanceType:
+    Default: "m4.xlarge"
+    Description: "Master Instance Type"
+    Type: "String"
+    MinLength: 2
+    MaxLength: 1024
+  coreInstanceType:
+    Default: "r5.16xlarge"
+    Description: "Core Instance Type"
+    Type: "String"
+    MinLength: 2
+    MaxLength: 1024
+  coreInstanceCount:
+    Default: "2"
+    Description: "Count of Core Instances"
+    Type: "String"
+    MinLength: 1
+    MaxLength: 6
+  coreInstanceBidPrice:
+    Default: "5.00" 
+    Description: "Bid Price of Core Instances"
+    Type: "String"
+    MinLength: 1
+    MaxLength: 6
+  SrcDataBucket:
+    Default: "s3://move-dataeng-bd-prod"
+    Description: "Source data S3 bucket"
+    Type: "String"
+  DstDataBucket:
+    Default: "s3://rdc-buyer-stage-ml-dev"
+    Description: "Destination data S3 bucket"
+    Type: "String"
+  StepsToRun:
+    Default: "all"
+    Description: "Steps to run"
+    Type: "String"
+  CodeSource:
+    Default: "s3://dataeng-buyer-stage-ml-dev/etl-pipeline-code/default"
+    Description: "Source code on S3"
+    Type: "String"
+  BootstrapSource:
+    Default: "s3://dataeng-buyer-stage-ml-dev/etl-pipeline-code/default/deployment/etl_bootstrap.sh"
+    Description: "EMR Bootstrap"
+    Type: "String"
+Mappings:
+  Config:
+    dev:
+      PreStepCommand: "echo 'PreStepCommand'"
+      PostStepCommand: "echo 'PostStepCommand'"
+      EC2KeyPair: "data-eng-dev"
+      SubnetId: "subnet-475ce00e"
+      SecurityGroupId: "sg-0739787664fdf6969"
+      PipelineLogUri: "s3://dataeng-buyer-stage-ml-dev/logs/"
+      BuyerStageETLPipelineCommandActivity: "sh /mnt/buyer_stage_ml/deployment/etl_emr_spark_submit.sh"
+      BuyerStageETLPipelineTesting: "sh /mnt/buyer_stage_ml/deployment/etl_emr_spark_test.sh"
+    qa:
+      PreStepCommand: "echo 'PreStepCommand'"
+      PostStepCommand: "echo 'PostStepCommand'"
+      EC2KeyPair: "data-eng-qa"
+      SubnetId: "subnet-2a676e72"
+      SecurityGroupId: "sg-868a33fd"
+      PipelineLogUri: "s3://dataeng-buyer-stage-ml-dev/logs/"
+      BuyerStageETLPipelineCommandActivity: "sh /mnt/buyer_stage_ml/deployment/etl_emr_spark_submit.sh"
+      BuyerStageETLPipelineTesting: "sh /mnt/buyer_stage_ml/deployment/etl_emr_spark_test.sh"
+Resources:
+  BuyerStageETLSNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      DisplayName: BuyerStageETLSNSNotification
+      Subscription:
+        - Endpoint: reza.rahimi@move.com
+          Protocol: email
+        - Endpoint: david.kong@move.com
+          Protocol: email
+      Tags:
+        - Key: owner
+          Value: dltechnologyconsumerprofile@move.com
+        - Key: product
+          Value: consumer_profile
+        - Key: component
+          Value: buyer-stage-ml
+        - Key: environment
+          Value: !Ref Env
+        - Key: classification
+          Value: internal
+      TopicName: BuyerStageETLSNSNotification
+  DataPipelineTemplate:
+    Type: "AWS::DataPipeline::Pipeline"
+    Properties:
+      Activate: true
+      Description: "buyer_intent_etl_pipeline"
+      Name:
+        Ref: "Name"
+      PipelineTags:
+        -
+          Key: "Name"
+          Value:
+            Ref: "Name"
+        -
+          Key: "environment"
+          Value:
+            Ref: "Env"
+        -
+          Key: "product"
+          Value: "consumer-profile"
+        -
+          Key: "component"
+          Value: "buyer-stage"
+        -
+          Key: "owner"
+          Value: "dltechnologyconsumerprofile@move.com"
+      ParameterObjects:
+        -
+          Attributes:
+            -
+              Key: "type"
+              StringValue: "String"
+          Id: "myEnv"
+        -
+          Attributes:
+            -
+              Key: "type"
+              StringValue: "String"
+          Id: "myInput"
+      ParameterValues:
+        -
+          Id: "myEnv"
+          StringValue:
+            Ref: "Env"
+        -
+          Id: "myInput"
+          StringValue:
+            Ref: "Input"
+      PipelineObjects:
+        -
+          Fields:
+            -
+              Key: "type"
+              StringValue: "EmrCluster"
+            -
+              Key: "terminateAfter"
+              StringValue: "60 Minutes" 
+            -
+              Key: "releaseLabel"
+              StringValue: "emr-5.23.0"
+            -
+              Key: "keyPair"
+              StringValue: !FindInMap [Config, !Ref Env, EC2KeyPair]
+            -
+              Key: "subnetId"
+              StringValue: !FindInMap [Config, !Ref Env, SubnetId]
+            -
+              Key: "configuration"
+              RefValue: "SparkEmrConfiguration"
+            -
+              Key: "configuration"
+              RefValue: "SparkEmrEnvConfiguration"
+            -
+              Key: "role"
+              StringValue: "DataPipelineDefaultRole"
+            -
+              Key: "resourceRole"
+              StringValue: "DataPipelineDefaultResourceRole"
+            -
+              Key: "masterInstanceType"
+              StringValue:
+                Ref: "masterInstanceType"
+            -
+              Key: "coreInstanceType"
+              StringValue:
+                Ref: "coreInstanceType"
+            -
+              Key: "coreInstanceCount"
+              StringValue:
+                Ref: "coreInstanceCount"
+            -
+              Key: "coreInstanceBidPrice"
+              StringValue: !Ref coreInstanceBidPrice
+            -
+              Key: "useOnDemandOnLastAttempt"
+              StringValue: "true"
+            -
+              Key: "applications"
+              StringValue: "Spark"
+            -
+              Key: "applications"
+              StringValue: "Livy"
+            -
+              Key: "applications"
+              StringValue: "Hadoop"
+            -
+              Key: "applications"
+              StringValue: "Ganglia"
+            -
+              Key: bootstrapAction
+              StringValue:
+                Fn::Join:
+                  - ','
+                  - - !Ref BootstrapSource
+                    - !Ref CodeSource
+            -
+              Key: "coreEbsConfiguration"
+              RefValue: "EBSConfiguration"
+          Id:
+            Fn::Join:
+              - ''
+              - - Ref: Input
+                - "-EmrCluster"
+          Name:
+            Fn::Join:
+              - ''
+              - - Ref: Input
+                - "-EmrCluster"
+        -
+          Name: "EBSConfiguration"
+          Id: "EBSConfiguration"
+          Fields:
+            -
+              Key: "ebsOptimized"
+              StringValue: True
+            -
+              Key: "ebsBlockDeviceConfig"
+              RefValue: EbsBlockDeviceConfig
+            -
+              Key: "type"
+              StringValue: "EbsConfiguration"
+        -
+          Name: "EbsBlockDeviceConfig"
+          Id: "EbsBlockDeviceConfig"
+          Fields:
+            -
+              Key: "volumesPerInstance"
+              StringValue: 1
+            -
+              Key: "volumeSpecification"
+              RefValue: VolumeSpecification
+            -
+              Key: "type"
+              StringValue: "EbsBlockDeviceConfig"
+        -
+          Name: "VolumeSpecification"
+          Id: "VolumeSpecification"
+          Fields:
+            -
+              Key: "volumeType"
+              StringValue: gp2
+            -
+              Key: "sizeInGB"
+              StringValue: 250
+            -
+              Key: "type"
+              StringValue: "VolumeSpecification"
+        -
+          Fields:
+            -
+              Key: "startAt"
+              StringValue: "FIRST_ACTIVATION_DATE_TIME"
+            -
+              Key: "endDateTime"
+              StringValue: "2021-05-14T23:30:00"
+            -
+              Key: "period"
+              StringValue: "8 hours"
+            -
+              Key: "type"
+              StringValue: "Schedule"
+          Id: "pipelineSchedule"
+          Name: "Schedule for Data Pipeline"
+        -
+          Fields:
+            -
+              Key: "role"
+              StringValue: "DataPipelineDefaultRole"
+            -
+              Key: "subject"
+              StringValue: "Failed PipelineId: #{node.@pipelineId} Error: #{node.errorMessage}"
+            -
+              Key: "message"
+              StringValue: "Error: #{node.errorStackTrace}"
+            -
+              Key: "topicArn"
+              StringValue: !Ref BuyerStageETLSNSTopic
+            -
+              Key: "type"
+              StringValue: "SnsAlarm"
+          Id: "pipelineSNS"
+          Name: "SNS for Data Pipeline"
+        -
+          Fields:
+            -
+              Key: "classification"
+              StringValue: "spark"
+            -
+              Key: "type"
+              StringValue: "EmrConfiguration"
+            -
+              Key: "property"
+              RefValue: "SparkConfigResourceAllocationProperty"
+          Id: "SparkEmrConfiguration"
+          Name: "SparkEmrConfiguration"
+        -
+          Fields:
+            -
+              Key: "key"
+              StringValue: "maximizeResourceAllocation"
+            -
+              Key: "value"
+              StringValue: "true"
+            -
+              Key: "type"
+              StringValue: "Property"
+          Id: "SparkConfigResourceAllocationProperty"
+          Name: "SparkConfigResourceAllocationProperty"
+        -
+          Fields:
+            -
+              Key: "classification"
+              StringValue: "spark-env"
+            -
+              Key: "type"
+              StringValue: "EmrConfiguration"
+            -
+              Key: "configuration"
+              RefValue: "SparkEnvProperty"
+          Id: "SparkEmrEnvConfiguration"
+          Name: "SparkEmrEnvConfiguration"
+        -
+          Fields:
+            -
+              Key: "classification"
+              StringValue: "export"
+            -
+              Key: "type"
+              StringValue: "EmrConfiguration"
+            -
+              Key: property
+              RefValue: SparkEnvPythonProperty
+          Id: "SparkEnvProperty"
+          Name: "SparkEnvProperty"
+        -
+          Fields:
+            -
+              Key: "key"
+              StringValue: "PYSPARK_PYTHON"
+            -
+              Key: "value"
+              StringValue: "python36"
+            -
+              Key: "type"
+              StringValue: "Property"
+          Id: "SparkEnvPythonProperty"
+          Name: "SparkEnvPythonProperty"
+        -
+          Fields:
+            -
+              Key: "schedule"
+              RefValue: "pipelineSchedule"
+            -
+              Key: "type"
+              StringValue: "ShellCommandActivity"
+            -
+              Key: "command"
+              StringValue: !FindInMap [Config, !Ref Env, PreStepCommand]
+            -
+              Key: "runsOn"
+              RefValue:
+                Fn::Join:
+                  - ''
+                  - - Ref: Input
+                    - "-EmrCluster"
+          Id: "PreStepShellCommand"
+          Name: "PreStepShellCommand"
+        -
+          Fields:
+            -
+              Key: "schedule"
+              RefValue: "pipelineSchedule"
+            -
+              Key: "dependsOn"
+              RefValue: "PreStepShellCommand"
+            -
+              Key: "type"
+              StringValue: "ShellCommandActivity"
+            -
+              Key: "command"
+              StringValue: !FindInMap [Config, !Ref Env, BuyerStageETLPipelineCommandActivity]
+              Key: "command"
+              StringValue:
+                Fn::Join:
+                  - ' '
+                  - - !FindInMap [Config, !Ref Env, BuyerStageETLPipelineCommandActivity]
+                    - !Ref Env
+                    - !Ref SrcDataBucket
+                    - !Ref DstDataBucket
+                    - !Ref StepsToRun
+            -
+              Key: "runsOn"
+              RefValue:
+                Fn::Join:
+                  - ''
+                  - - Ref: Input
+                    - "-EmrCluster"
+          Id: "EmrBuyerStageShellCommand"
+          Name: "EmrBuyerStageShellCommand"
+        -
+          Fields:
+            -
+              Key: "schedule"
+              RefValue: "pipelineSchedule"
+            -
+              Key: "dependsOn"
+              RefValue: "EmrBuyerStageShellCommand"
+            -
+              Key: "type"
+              StringValue: "ShellCommandActivity"
+            -
+              Key: "command"
+              StringValue: !FindInMap [Config, !Ref Env, BuyerStageETLPipelineTesting]
+              Key: "command"
+              StringValue:
+                Fn::Join:
+                  - ' '
+                  - - !FindInMap [Config, !Ref Env, BuyerStageETLPipelineTesting]
+                    - !Ref DstDataBucket
+            -
+              Key: "runsOn"
+              RefValue:
+                Fn::Join:
+                  - ''
+                  - - Ref: Input
+                    - "-EmrCluster"
+          Id: "BuyerStageETLPipelineTesting"
+          Name: "BuyerStageETLPipelineTesting"
+        -
+          Fields:
+            -
+              Key: "scheduleType"
+              StringValue: "CRON"
+            -
+              Key: "type"
+              StringValue: "Default"
+            -
+              Key: "failureAndRerunMode"
+              StringValue: "CASCADE"
+            -
+              Key: "role"
+              StringValue: "DataPipelineDefaultRole"
+            -
+              Key: "resourceRole"
+              StringValue: "DataPipelineDefaultResourceRole"
+            -
+              Key: "pipelineLogUri"
+              StringValue: !FindInMap [Config, !Ref Env, PipelineLogUri]
+          Id: "Default"
+          Name: "Default"
+  
